@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import json
 import os
 import requests
+import re # 정규표현식 추가 (JSON 추출용)
 from datetime import datetime
 
 # ---------------------------------------------------------
@@ -121,16 +122,22 @@ with c_h1: st.write(f"👋 **{st.session_state['username']}**님의 대시보드
 with c_h2: 
     if st.button("로그아웃"): logout()
 
-# AI 설정
+# AI 설정 (모델 자동 감지)
 try:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel("gemini-pro")
+    target_model = "gemini-pro"
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            if 'gemini' in m.name:
+                target_model = m.name
+                break
+    model = genai.GenerativeModel(target_model)
 except: pass
 
 if 'portfolio_db' not in st.session_state:
     st.session_state['portfolio_db'] = load_portfolio()
 
-# --- [데이터 함수 복구] ---
+# --- [데이터 함수 강화 수정] ---
 
 @st.cache_data(ttl=600)
 def get_market_indices():
@@ -146,13 +153,24 @@ def get_market_indices():
 
 @st.cache_data(ttl=900)
 def get_fear_and_greed():
+    """CNN 차단 우회를 위한 헤더 강화"""
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.cnn.com/"}
-        r = requests.get(url, headers=headers, timeout=5)
+        # 헤더를 실제 브라우저처럼 위장
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.cnn.com/",
+            "Origin": "https://www.cnn.com",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
         d = r.json()
         return d['fear_and_greed']['score'], d['fear_and_greed']['rating']
-    except: return None, "N/A"
+    except Exception as e:
+        # 실패 시 로그 출력 (디버깅용)
+        print(f"FearGreed Error: {e}")
+        return None, "Error"
 
 @st.cache_data(ttl=3600)
 def get_sector_history():
@@ -190,11 +208,11 @@ def get_stock_details(t):
         return {"current": cur, "rsi": rsi, "per": i.get('trailingPE',0), "pbr": i.get('priceToBook',0), "div": i.get('dividendYield',0)*100 if i.get('dividendYield') else 0}
     except: return None
 
-# --- [AI 함수 복구] ---
+# --- [AI 함수 강화 수정] ---
 
 @st.cache_data(ttl=3600)
 def get_ai_market_briefing(f_score):
-    if API_KEY == "SECRET_KEY_NOT_FOUND": return "API 키 없음"
+    if API_KEY == "SECRET_KEY_NOT_FOUND": return "API 키가 설정되지 않았습니다."
     prompt = f"오늘 공포지수 {f_score}. 버핏지수 추정 및 투자 조언 3줄 요약."
     try: return model.generate_content(prompt).text
     except: return "분석 실패"
@@ -203,13 +221,26 @@ def get_ai_market_briefing(f_score):
 def get_ai_calendar_data():
     if API_KEY == "SECRET_KEY_NOT_FOUND": return []
     today = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"오늘 {today}. 향후 2주 미국 경제지표(CPI,PPI,고용,FOMC,실적) JSON으로만: [{{'date':'MM-DD(요일)','event':'이름','importance':'⭐⭐⭐'}}]"
+    # Prompt 개선: JSON만 내놓으라고 강력하게 지시
+    prompt = f"""
+    Today is {today}. List 3-5 major US economic events (CPI, FOMC, Earnings) for next 2 weeks.
+    Return ONLY JSON array. No markdown. No text.
+    Format: [{{"date":"MM-DD(Day)","event":"Event Name(KR)","importance":"⭐⭐⭐"}}]
+    """
     try:
         res = model.generate_content(prompt)
         text = res.text
-        s = text.find('['); e = text.rfind(']') + 1
-        return json.loads(text[s:e])
-    except: return []
+        
+        # JSON 추출 로직 강화 (앞뒤 잡담 제거)
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            clean_json = match.group(0)
+            return json.loads(clean_json)
+        else:
+            return []
+    except Exception as e:
+        print(f"Calendar Error: {e}")
+        return []
 
 # --- [UI 구성] ---
 
@@ -223,7 +254,7 @@ st.subheader("💰 Smart Asset Dashboard")
 sdf, smap = get_sector_history()
 inv_smap = {v: k for k, v in smap.items()}
 
-# 섹터 기간 선택 복구
+# 섹터 기간 선택
 c1, c2 = st.columns([1, 6])
 with c1:
     st.write("⏱️ **기간**")
@@ -245,19 +276,27 @@ cc1, cc2 = st.columns([1, 1])
 with cc1:
     st.markdown("##### 😨 Fear & Greed Index")
     fs, fr = get_fear_and_greed()
-    if fs:
-        fig = go.Figure(go.Indicator(mode="gauge+number", value=fs, title={'text':"Index"}, gauge={'axis':{'range':[0,100]}, 'bar':{'color':'black'}, 'steps':[{'range':[0,25],'color':'red'},{'range':[75,100],'color':'green'}]}))
+    if fs is not None:
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=fs, title={'text':fr}, gauge={'axis':{'range':[0,100]}, 'bar':{'color':'black'}, 'steps':[{'range':[0,25],'color':'red'},{'range':[75,100],'color':'green'}]}))
         fig.update_layout(height=200, margin=dict(t=30,b=20,l=20,r=20))
         st.plotly_chart(fig, use_container_width=True)
-        st.info(get_ai_market_briefing(fs)) # AI 브리핑 복구
-    else: st.error("지수 로딩 실패")
+        st.info(get_ai_market_briefing(fs))
+    else: 
+        st.error("지수 로딩 실패 (CNN 연결 오류)")
+        st.caption("잠시 후 다시 시도하거나, 브라우저를 새로고침 해보세요.")
 
 with cc2:
-    st.markdown("##### 🗓️ 주요 경제 일정 (2주)") # 경제 일정 복구
+    st.markdown("##### 🗓️ 주요 경제 일정 (2주)")
     with st.spinner("Loading..."):
         cal = get_ai_calendar_data()
-    if cal: st.dataframe(pd.DataFrame(cal), column_config={"date":"날짜","event":"이벤트","importance":"중요도"}, hide_index=True, use_container_width=True)
-    else: st.warning("일정 데이터 없음")
+    if cal: 
+        st.dataframe(pd.DataFrame(cal), column_config={"date":"날짜","event":"이벤트","importance":"중요도"}, hide_index=True, use_container_width=True)
+    else: 
+        if API_KEY == "SECRET_KEY_NOT_FOUND":
+            st.warning("⚠️ API 키가 없습니다. Secrets 설정을 확인하세요.")
+        else:
+            st.warning("일정 데이터 없음 (AI 응답 오류)")
+            st.caption("AI가 데이터를 생성하지 못했습니다. 새로고침 해보세요.")
 
 st.divider()
 st.subheader("📂 My Portfolio")
