@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import json
 import os
 import requests
+import re
 from datetime import datetime
 
 # ---------------------------------------------------------
@@ -13,13 +14,10 @@ from datetime import datetime
 # ---------------------------------------------------------
 st.set_page_config(page_title="My Asset", layout="wide", page_icon="💸", initial_sidebar_state="collapsed")
 
-# 토스증권 느낌의 CSS (카드 디자인, 폰트, 여백 등)
+# 토스증권 느낌의 CSS
 st.markdown("""
 <style>
-    /* 기본 배경 및 여백 */
     .main .block-container {max-width: 1000px; padding-top: 2rem; padding-bottom: 5rem;}
-    
-    /* 카드 스타일 컨테이너 */
     .metric-card {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -28,19 +26,13 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 20px;
     }
-    
-    /* 텍스트 스타일 */
     .big-number {font-size: 28px; font-weight: 700; color: #333;}
     .sub-text {font-size: 14px; color: #666;}
-    .profit-plus {color: #e72a2a; font-weight: 600;} /* 상승 빨강 */
-    .profit-minus {color: #2a6ce7; font-weight: 600;} /* 하락 파랑 */
-    
-    /* 탭 스타일 */
+    .profit-plus {color: #e72a2a; font-weight: 600;}
+    .profit-minus {color: #2a6ce7; font-weight: 600;}
     .stTabs [data-baseweb="tab-list"] {gap: 20px;}
     .stTabs [data-baseweb="tab"] {height: 50px; white-space: pre-wrap; background-color: #f9f9f9; border-radius: 10px; gap: 1px; padding-top: 10px; padding-bottom: 10px;}
     .stTabs [aria-selected="true"] {background-color: #eef2ff; color: #3b66ff; font-weight: bold;}
-    
-    /* 사이드바 숨김 */
     [data-testid="collapsedControl"] {display: none}
     section[data-testid="stSidebar"] {display: none}
 </style>
@@ -88,14 +80,14 @@ def save_portfolio(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # ---------------------------------------------------------
-# [핵심 로직] 매수, 매도, 계좌관리
+# [핵심 로직]
 # ---------------------------------------------------------
 def trade_stock(account, ticker, price, qty, type="buy"):
     db = st.session_state['portfolio_db']
     if account not in db: db[account] = {}
     ticker = ticker.upper()
     
-    if type == "buy": # 매수 (물타기)
+    if type == "buy":
         if ticker in db[account]:
             old_qty = db[account][ticker]['qty']
             old_price = db[account][ticker]['avg_price']
@@ -106,16 +98,14 @@ def trade_stock(account, ticker, price, qty, type="buy"):
             db[account][ticker] = {'avg_price': price, 'qty': qty}
         msg = f"✅ {ticker} {qty}주 매수 완료!"
         
-    elif type == "sell": # 매도 (분할매도)
+    elif type == "sell":
         if ticker not in db[account]: return "❌ 보유하지 않은 종목입니다."
         old_qty = db[account][ticker]['qty']
-        
         if qty > old_qty: return "❌ 보유 수량보다 많이 팔 수 없습니다."
-        
-        if qty == old_qty: # 전량 매도
+        if qty == old_qty:
             del db[account][ticker]
             msg = f"🗑️ {ticker} 전량 매도 완료!"
-        else: # 부분 매도 (평단가는 유지됨)
+        else:
             db[account][ticker]['qty'] = old_qty - qty
             msg = f"📉 {ticker} {qty}주 매도 완료! (잔고: {old_qty - qty}주)"
             
@@ -141,40 +131,54 @@ def manage_account_action(action, old_name, new_name=None):
             st.rerun()
 
 # ---------------------------------------------------------
-# [데이터 페칭] - 지수 목록 업데이트 완료!
+# [데이터 페칭] (에러 수정됨)
 # ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def get_market_indices():
-    # 요청하신 다우존스, 코스닥, 금, 비트코인, WTI 추가
     tickers = {
-        "🇺🇸 다우존스": "^DJI",
-        "🇺🇸 S&P500": "^GSPC",
-        "🇺🇸 나스닥": "^IXIC",
-        "🇰🇷 코스피": "^KS11",
-        "🇰🇷 코스닥": "^KQ11",
-        "₿ 비트코인": "BTC-USD",
-        "🥇 금 선물": "GC=F",
-        "🛢 WTI오일": "CL=F",
-        "💵 환율(원)": "KRW=X"
+        "🇺🇸 다우": "^DJI", "🇺🇸 S&P500": "^GSPC", "🇺🇸 나스닥": "^IXIC",
+        "🇰🇷 코스피": "^KS11", "🇰🇷 코스닥": "^KQ11",
+        "₿ 비트코인": "BTC-USD", "🥇 금": "GC=F", "🛢 WTI": "CL=F", "💵 환율": "KRW=X"
     }
     data = {}
     for name, ticker in tickers.items():
         try:
             h = yf.Ticker(ticker).history(period="5d")
-            c = h['Close'].iloc[-1]; p = h['Close'].iloc[-2]
+            # 안전하게 float 변환
+            c = float(h['Close'].iloc[-1])
+            p = float(h['Close'].iloc[-2])
             data[name] = (c, ((c - p) / p) * 100)
-        except: data[name] = (0, 0)
+        except: data[name] = (0.0, 0.0)
     return data
 
 @st.cache_data(ttl=300)
 def get_current_prices(ticker_list):
+    """[수정됨] 데이터 타입 에러 방지용"""
     if not ticker_list: return {}
     try:
+        # yfinance 다운로드
         data = yf.download(ticker_list, period="1d", progress=False)['Close']
         if data.empty: return {}
+
+        # 1개 종목일 때
         if len(ticker_list) == 1:
-            return {ticker_list[0]: data.iloc[-1]}
-        return data.iloc[-1].to_dict()
+            try:
+                # 스칼라 값으로 변환 시도
+                val = float(data.iloc[-1])
+                return {ticker_list[0]: val}
+            except:
+                return {ticker_list[0]: 0.0}
+        
+        # 여러 종목일 때 (Series -> Dict)
+        last_row = data.iloc[-1]
+        # 모든 값을 강제로 float으로 변환하여 딕셔너리 생성
+        result = {}
+        for k, v in last_row.items():
+            try:
+                result[k] = float(v)
+            except:
+                result[k] = 0.0
+        return result
     except: return {}
 
 # ---------------------------------------------------------
@@ -210,36 +214,36 @@ if not st.session_state['logged_in']: login_page(); st.stop()
 if 'portfolio_db' not in st.session_state: st.session_state['portfolio_db'] = load_portfolio()
 db = st.session_state['portfolio_db']
 
-# 1. 헤더
 c_h1, c_h2 = st.columns([8, 1])
 with c_h1: st.write(f"👋 반가워요, **{st.session_state['username']}**님")
 with c_h2: 
     if st.button("로그아웃"): 
         st.session_state['logged_in'] = False; st.session_state['username'] = None; st.rerun()
 
-# 2. 자산 전체 계산
+# 2. 자산 전체 계산 (에러 방지 로직 추가)
 total_invest = 0.0
 total_eval = 0.0
 all_tickers = []
 for acc in db.values():
     all_tickers.extend(acc.keys())
     for info in acc.values():
-        total_invest += info['avg_price'] * info['qty']
+        total_invest += float(info['avg_price']) * float(info['qty'])
 
 all_tickers = list(set(all_tickers))
 price_map = get_current_prices(all_tickers)
 
 for acc in db.values():
     for t, info in acc.items():
+        qty = float(info['qty'])
         if t in price_map:
-            total_eval += price_map[t] * info['qty']
+            total_eval += float(price_map[t]) * qty
         else:
-            total_eval += info['avg_price'] * info['qty']
+            total_eval += float(info['avg_price']) * qty
 
 total_profit = total_eval - total_invest
 total_yield = (total_profit / total_invest * 100) if total_invest > 0 else 0.0
 
-# 3. 토스 스타일 메인 카드
+# 3. 토스 스타일 메인 카드 (에러 나던 곳 해결됨)
 st.markdown(f"""
 <div class="metric-card">
     <div class="sub-text">총 보유자산</div>
@@ -269,8 +273,8 @@ with tab_pf:
         st.info("📌 계좌가 없습니다. '계좌관리' 탭에서 먼저 만들어주세요.")
     else:
         for acc_name, stocks in db.items():
-            acc_invest = sum(i['avg_price'] * i['qty'] for i in stocks.values())
-            acc_eval = sum((price_map.get(t, i['avg_price']) * i['qty']) for t, i in stocks.items())
+            acc_invest = sum(float(i['avg_price']) * float(i['qty']) for i in stocks.values())
+            acc_eval = sum((float(price_map.get(t, i['avg_price'])) * float(i['qty'])) for t, i in stocks.items())
             acc_profit = acc_eval - acc_invest
             acc_yield = (acc_profit / acc_invest * 100) if acc_invest > 0 else 0.0
             
@@ -282,15 +286,18 @@ with tab_pf:
                 if stocks:
                     rows = []
                     for t, info in stocks.items():
-                        curr = price_map.get(t, info['avg_price'])
-                        p_rate = ((curr - info['avg_price']) / info['avg_price']) * 100
+                        curr = float(price_map.get(t, info['avg_price']))
+                        avg_p = float(info['avg_price'])
+                        qty = float(info['qty'])
+                        
+                        p_rate = ((curr - avg_p) / avg_p) * 100
                         rows.append({
                             "종목": t,
                             "현재가": curr,
                             "수익률": p_rate / 100,
-                            "평가손익": (curr - info['avg_price']) * info['qty'],
-                            "보유수량": info['qty'],
-                            "매입가": info['avg_price']
+                            "평가손익": (curr - avg_p) * qty,
+                            "보유수량": qty,
+                            "매입가": avg_p
                         })
                     
                     df = pd.DataFrame(rows)
@@ -301,7 +308,8 @@ with tab_pf:
                             "현재가": st.column_config.NumberColumn(format="%.2f"),
                             "수익률": st.column_config.NumberColumn(format="%.2f%%"),
                             "평가손익": st.column_config.NumberColumn(format="%.0f"),
-                            "매입가": st.column_config.NumberColumn(format="%.2f")
+                            "매입가": st.column_config.NumberColumn(format="%.2f"),
+                            "보유수량": st.column_config.NumberColumn(format="%.0f"),
                         },
                         hide_index=True,
                         use_container_width=True
@@ -348,20 +356,15 @@ with tab_manage:
                 st.write(""); st.write("") 
                 if st.button("🗑️ 삭제", type="primary"): manage_account_action("delete", target_acc)
 
-# [탭 4] 시장 정보 (업데이트된 지표 목록)
+# [탭 4] 시장 정보
 with tab_market:
     st.markdown("##### 🌍 주요 시장 지표")
     indices = get_market_indices()
-    
-    # 3열로 배치하여 깔끔하게 표시
     m_cols = st.columns(3)
     for i, (k, v) in enumerate(indices.items()):
-        # i % 3을 사용하여 3열씩 순서대로 채움
         m_cols[i % 3].metric(k, f"{v[0]:,.2f}", f"{v[1]:.2f}%")
     
     st.divider()
-    
-    # AI 브리핑
     if st.button("🤖 AI 시장 브리핑 (Gemini)"):
         if API_KEY == "SECRET_KEY_NOT_FOUND":
             st.error("API 키가 설정되지 않았습니다.")
