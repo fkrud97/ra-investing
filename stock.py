@@ -30,80 +30,60 @@ except:
     API_KEY = "SECRET_KEY_NOT_FOUND"
 
 # ---------------------------------------------------------
-# [회원 관리 시스템] JSON 파일로 유저 정보 관리
+# [회원 관리 시스템]
 # ---------------------------------------------------------
 USER_FILE = "users.json"
 
 def load_users():
-    """유저 목록 불러오기"""
     if os.path.exists(USER_FILE):
         with open(USER_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"admin": "1234"} # 기본 관리자 계정
+    return {"admin": "1234"}
 
 def save_user(username, password):
-    """신규 유저 저장하기"""
     users = load_users()
     users[username] = password
     with open(USER_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, ensure_ascii=False, indent=4)
 
-# ---------------------------------------------------------
-# [로그인 & 회원가입 화면]
-# ---------------------------------------------------------
 def login_page():
     st.title("🔐 Smart Asset Home")
     st.write("개인 자산 관리 시스템에 오신 것을 환영합니다.")
-
-    # 탭으로 로그인/회원가입 분리
-    tab1, tab2 = st.tabs(["🔑 로그인", "📝 회원가입"])
-
-    # 1. 로그인 탭
-    with tab1:
-        with st.form("login_form"):
-            username = st.text_input("아이디")
-            password = st.text_input("비밀번호", type="password")
-            submit = st.form_submit_button("로그인")
-
-            if submit:
-                users_db = load_users()
-                if username in users_db and users_db[username] == password:
+    
+    t1, t2 = st.tabs(["🔑 로그인", "📝 회원가입"])
+    
+    with t1:
+        with st.form("login"):
+            id_ = st.text_input("아이디")
+            pw = st.text_input("비밀번호", type="password")
+            if st.form_submit_button("로그인"):
+                db = load_users()
+                if id_ in db and db[id_] == pw:
                     st.session_state['logged_in'] = True
-                    st.session_state['username'] = username
-                    st.success(f"{username}님 환영합니다!")
+                    st.session_state['username'] = id_
                     st.rerun()
-                else:
-                    st.error("아이디가 없거나 비밀번호가 틀렸습니다.")
-
-    # 2. 회원가입 탭
-    with tab2:
-        with st.form("signup_form"):
-            new_user = st.text_input("새 아이디 만들기")
-            new_pw = st.text_input("새 비밀번호 설정", type="password")
-            new_pw_chk = st.text_input("비밀번호 확인", type="password")
-            signup_submit = st.form_submit_button("가입하기")
-
-            if signup_submit:
-                users_db = load_users()
-                if new_user in users_db:
-                    st.error("이미 존재하는 아이디입니다.")
-                elif new_pw != new_pw_chk:
-                    st.error("비밀번호가 서로 다릅니다.")
-                elif not new_user or not new_pw:
-                    st.error("아이디와 비밀번호를 입력해주세요.")
-                else:
-                    save_user(new_user, new_pw)
-                    st.success("🎉 가입 성공! '로그인' 탭에서 접속해주세요.")
+                else: st.error("정보가 일치하지 않습니다.")
+    
+    with t2:
+        with st.form("signup"):
+            new_id = st.text_input("새 아이디")
+            new_pw = st.text_input("새 비밀번호", type="password")
+            if st.form_submit_button("가입"):
+                db = load_users()
+                if new_id in db: st.error("이미 있는 아이디입니다.")
+                elif new_id and new_pw:
+                    save_user(new_id, new_pw)
+                    st.success("가입 완료! 로그인해주세요.")
+                else: st.error("정보를 입력해주세요.")
 
 def logout():
     st.session_state['logged_in'] = False
     st.session_state['username'] = None
-    if 'portfolio_db' in st.session_state:
-        del st.session_state['portfolio_db']
+    if 'portfolio_db' in st.session_state: del st.session_state['portfolio_db']
     st.rerun()
 
 # ---------------------------------------------------------
-# [데이터 관리] 유저별 포트폴리오 파일 분리
+# [데이터 관리] 유저별 포트폴리오
 # ---------------------------------------------------------
 def get_user_file():
     user = st.session_state.get('username', 'guest')
@@ -122,27 +102,24 @@ def save_portfolio(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # ---------------------------------------------------------
-# [메인 로직 실행]
+# [메인 실행 로직]
 # ---------------------------------------------------------
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
-# 로그인이 안 되어 있으면 로그인 페이지 표시 후 중단
 if not st.session_state['logged_in']:
     login_page()
     st.stop()
 
 # =========================================================
-# [대시보드 화면] (로그인 사용자만 접근 가능)
+# [대시보드 화면] (로그인 사용자 전용)
 # =========================================================
 
 # 상단 헤더
-col_h1, col_h2 = st.columns([8, 1])
-with col_h1:
-    st.write(f"👋 **{st.session_state['username']}**님의 포트폴리오")
-with col_h2:
-    if st.button("로그아웃"):
-        logout()
+c_h1, c_h2 = st.columns([8, 1])
+with c_h1: st.write(f"👋 **{st.session_state['username']}**님의 대시보드")
+with c_h2: 
+    if st.button("로그아웃"): logout()
 
 # AI 설정
 try:
@@ -150,21 +127,20 @@ try:
     model = genai.GenerativeModel("gemini-pro")
 except: pass
 
-# 데이터 로딩
 if 'portfolio_db' not in st.session_state:
     st.session_state['portfolio_db'] = load_portfolio()
 
-# --- [함수들] (기존 로직 유지) ---
+# --- [데이터 함수 복구] ---
+
 @st.cache_data(ttl=600)
 def get_market_indices():
     tickers = {"USD/KRW": "KRW=X", "US 10Y": "^TNX", "VIX": "^VIX", "KOSPI": "^KS11", "NASDAQ": "^IXIC"}
     data = {}
     for name, ticker in tickers.items():
         try:
-            hist = yf.Ticker(ticker).history(period="5d")
-            cur = hist['Close'].iloc[-1]
-            prev = hist['Close'].iloc[-2]
-            data[name] = (cur, ((cur - prev) / prev) * 100)
+            h = yf.Ticker(ticker).history(period="5d")
+            c = h['Close'].iloc[-1]; p = h['Close'].iloc[-2]
+            data[name] = (c, ((c - p) / p) * 100)
         except: data[name] = (0, 0)
     return data
 
@@ -172,20 +148,38 @@ def get_market_indices():
 def get_fear_and_greed():
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Referer": "https://www.cnn.com/"
-        }
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.cnn.com/"}
         r = requests.get(url, headers=headers, timeout=5)
         d = r.json()
         return d['fear_and_greed']['score'], d['fear_and_greed']['rating']
     except: return None, "N/A"
 
+@st.cache_data(ttl=3600)
+def get_sector_history():
+    s = {"XLK":"XLK", "SOXX":"SOXX", "XLF":"XLF", "XLV":"XLV", "XLE":"XLE"}
+    try:
+        df = yf.download(list(s.values()), period="1y", progress=False)['Close']
+        return df, s
+    except: return pd.DataFrame(), s
+
+def calculate_sector_change(df, period_str):
+    periods = {"1일": 2, "1주": 5, "1달": 21, "1분기": 63, "반년": 126, "1년": 252}
+    days = periods.get(period_str, 21)
+    changes = {}
+    if df.empty: return {}
+    for t in df.columns:
+        try:
+            if len(df) < days: start = df[t].iloc[0]
+            else: start = df[t].iloc[-days]
+            curr = df[t].iloc[-1]
+            changes[t] = ((curr - start) / start) * 100
+        except: changes[t] = 0.0
+    return changes
+
 @st.cache_data(ttl=600)
 def get_stock_details(t):
     try:
-        s = yf.Ticker(t)
-        h = s.history(period="1mo")
+        s = yf.Ticker(t); h = s.history(period="1mo")
         if h.empty: return None
         cur = h['Close'].iloc[-1]
         delta = h['Close'].diff(1)
@@ -196,55 +190,79 @@ def get_stock_details(t):
         return {"current": cur, "rsi": rsi, "per": i.get('trailingPE',0), "pbr": i.get('priceToBook',0), "div": i.get('dividendYield',0)*100 if i.get('dividendYield') else 0}
     except: return None
 
-@st.cache_data(ttl=3600)
-def get_sector_data():
-    try:
-        s = {"XLK":"XLK", "SOXX":"SOXX", "XLF":"XLF", "XLV":"XLV", "XLE":"XLE"}
-        df = yf.download(list(s.values()), period="6mo", progress=False)['Close']
-        return df
-    except: return pd.DataFrame()
+# --- [AI 함수 복구] ---
 
-def add_stock(acc, t, p, q):
-    db = st.session_state['portfolio_db']
-    if acc not in db: db[acc] = {}
-    t = t.upper()
-    if t in db[acc]:
-        oq = db[acc][t]['qty']; op = db[acc][t]['avg_price']
-        nq = oq + q; np = ((op * oq) + (p * q)) / nq
-        db[acc][t] = {'avg_price': np, 'qty': nq}
-    else: db[acc][t] = {'avg_price': p, 'qty': q}
-    save_portfolio(db)
+@st.cache_data(ttl=3600)
+def get_ai_market_briefing(f_score):
+    if API_KEY == "SECRET_KEY_NOT_FOUND": return "API 키 없음"
+    prompt = f"오늘 공포지수 {f_score}. 버핏지수 추정 및 투자 조언 3줄 요약."
+    try: return model.generate_content(prompt).text
+    except: return "분석 실패"
+
+@st.cache_data(ttl=43200)
+def get_ai_calendar_data():
+    if API_KEY == "SECRET_KEY_NOT_FOUND": return []
+    today = datetime.now().strftime("%Y-%m-%d")
+    prompt = f"오늘 {today}. 향후 2주 미국 경제지표(CPI,PPI,고용,FOMC,실적) JSON으로만: [{{'date':'MM-DD(요일)','event':'이름','importance':'⭐⭐⭐'}}]"
+    try:
+        res = model.generate_content(prompt)
+        text = res.text
+        s = text.find('['); e = text.rfind(']') + 1
+        return json.loads(text[s:e])
+    except: return []
 
 # --- [UI 구성] ---
+
 st.divider()
 mk = get_market_indices()
 cols = st.columns(5)
 for i, (k, v) in enumerate(mk.items()): cols[i].metric(k, f"{v[0]:,.2f}", f"{v[1]:.2f}%")
 
 st.divider()
-c1, c2 = st.columns([1, 1])
+st.subheader("💰 Smart Asset Dashboard")
+sdf, smap = get_sector_history()
+inv_smap = {v: k for k, v in smap.items()}
+
+# 섹터 기간 선택 복구
+c1, c2 = st.columns([1, 6])
 with c1:
-    st.subheader("😨 Fear & Greed Index")
+    st.write("⏱️ **기간**")
+    sel_period = st.radio("기간", ["1일", "1주", "1달", "1분기", "반년", "1년"], label_visibility="collapsed")
+with c2:
+    if not sdf.empty:
+        chg = calculate_sector_change(sdf, sel_period)
+        df_c = pd.DataFrame(list(chg.items()), columns=['Ticker', 'Change'])
+        df_c['Name'] = df_c['Ticker'].map(inv_smap)
+        df_c['Color'] = df_c['Change'].apply(lambda x: '#ff4b4b' if x > 0 else '#4b88ff')
+        fig = go.Figure(go.Bar(x=df_c['Name'], y=df_c['Change'], marker_color=df_c['Color'], text=df_c['Change'].apply(lambda x: f"{x:.2f}%"), textposition='auto'))
+        fig.update_layout(height=250, margin=dict(t=10,b=10,l=10,r=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+st.subheader("📅 Market Sentiment & Calendar")
+cc1, cc2 = st.columns([1, 1])
+
+with cc1:
+    st.markdown("##### 😨 Fear & Greed Index")
     fs, fr = get_fear_and_greed()
     if fs:
-        fig = go.Figure(go.Indicator(mode="gauge+number", value=fs, title={'text':fr}, gauge={'axis':{'range':[0,100]}, 'bar':{'color':'black'}, 'steps':[{'range':[0,25],'color':'red'},{'range':[75,100],'color':'green'}]}))
-        fig.update_layout(height=250, margin=dict(t=30,b=20,l=20,r=20))
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=fs, title={'text':"Index"}, gauge={'axis':{'range':[0,100]}, 'bar':{'color':'black'}, 'steps':[{'range':[0,25],'color':'red'},{'range':[75,100],'color':'green'}]}))
+        fig.update_layout(height=200, margin=dict(t=30,b=20,l=20,r=20))
         st.plotly_chart(fig, use_container_width=True)
+        st.info(get_ai_market_briefing(fs)) # AI 브리핑 복구
     else: st.error("지수 로딩 실패")
 
-with c2:
-    st.subheader("📊 Sector Trend (1 Month)")
-    sdf = get_sector_data()
-    if not sdf.empty:
-        chg = ((sdf.iloc[-1] - sdf.iloc[-21]) / sdf.iloc[-21]) * 100
-        fig = go.Figure(go.Bar(x=chg.index, y=chg.values, marker_color=['red' if x>0 else 'blue' for x in chg.values]))
-        fig.update_layout(height=250, margin=dict(t=30,b=20,l=20,r=20))
-        st.plotly_chart(fig, use_container_width=True)
+with cc2:
+    st.markdown("##### 🗓️ 주요 경제 일정 (2주)") # 경제 일정 복구
+    with st.spinner("Loading..."):
+        cal = get_ai_calendar_data()
+    if cal: st.dataframe(pd.DataFrame(cal), column_config={"date":"날짜","event":"이벤트","importance":"중요도"}, hide_index=True, use_container_width=True)
+    else: st.warning("일정 데이터 없음")
 
 st.divider()
 st.subheader("📂 My Portfolio")
 
-with st.expander("➕ 자산 관리 / 계좌 추가", expanded=False):
+with st.expander("➕ 자산 추가 / 계좌 관리", expanded=False):
     db = st.session_state['portfolio_db']
     accs = list(db.keys())
     t1, t2 = st.tabs(["매수", "계좌생성"])
@@ -256,7 +274,14 @@ with st.expander("➕ 자산 관리 / 계좌 추가", expanded=False):
             sq = c3.number_input("수량",1)
             sp = c4.number_input("단가",0.0)
             if c5.button("추가"):
-                if st_in and sp>0: add_stock(sa, st_in, sp, sq); st.rerun()
+                if st_in and sp>0: 
+                    if sa not in db: db[sa]={}
+                    if st_in in db[sa]:
+                        oq=db[sa][st_in]['qty']; op=db[sa][st_in]['avg_price']
+                        nq=oq+sq; np=((op*oq)+(sp*sq))/nq
+                        db[sa][st_in]={'avg_price':np,'qty':nq}
+                    else: db[sa][st_in]={'avg_price':sp,'qty':sq}
+                    save_portfolio(db); st.rerun()
     with t2:
         na = st.text_input("새 계좌명")
         if st.button("생성"):
@@ -282,14 +307,12 @@ if db:
             if d_t!="선택" and d_col.button("삭제", key=f"d_{an}"):
                 del db[an][d_t]; save_portfolio(db); st.rerun()
 
-st.divider()
-if st.button("🤖 AI 포트폴리오 진단"):
+st.write("")
+if st.button("🤖 AI 가치투자 진단"):
     if API_KEY == "SECRET_KEY_NOT_FOUND": st.error("API 키 없음")
     elif not all_data: st.warning("데이터 없음")
     else:
-        with st.spinner("AI 분석 중..."):
-            p = f"시장상황:{mk}. 공포지수:{fs}. 내자산:{all_data}. 전문가 관점에서 진단해줘."
-            try:
-                res = model.generate_content(p)
-                st.info(res.text)
+        with st.spinner("분석 중..."):
+            p = f"시장:{mk}. 공포:{fs}. 내자산:{all_data}. 가치투자 관점 진단 및 조언."
+            try: st.info(model.generate_content(p).text)
             except: st.error("분석 실패")
