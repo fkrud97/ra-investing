@@ -13,7 +13,6 @@ from datetime import datetime
 # ---------------------------------------------------------
 st.set_page_config(page_title="Pro Insight Dashboard", layout="wide", page_icon="📈", initial_sidebar_state="collapsed")
 
-# CSS: 사이드바 숨김 & 여백 조정
 st.markdown("""
 <style>
     [data-testid="collapsedControl"] {display: none}
@@ -23,23 +22,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [보안] API 키 설정 (Streamlit Cloud Secrets 연동)
+# [보안] API 키 설정
 # ---------------------------------------------------------
 try:
-    # 1. Streamlit Cloud의 Secrets에서 키를 가져옴
     API_KEY = st.secrets["GEMINI_API_KEY"]
+    api_status = "✅ API Key Loaded"
 except:
-    # 2. 로컬(내 컴퓨터)이나 키 설정이 안 된 경우 안내
-    # (주의: 깃허브에 올릴 때는 절대 여기에 실제 키를 적지 마세요!)
     API_KEY = "SECRET_KEY_NOT_FOUND" 
+    api_status = "❌ API Key Missing"
 
 # ---------------------------------------------------------
 # [AI 모델 연결]
 # ---------------------------------------------------------
 try:
     genai.configure(api_key=API_KEY)
-    
-    # 모델 자동 탐색
     target_model = "gemini-pro"
     for m in genai.list_models():
         if 'generateContent' in m.supported_generation_methods:
@@ -47,18 +43,12 @@ try:
                 target_model = m.name
                 break
     model = genai.GenerativeModel(target_model)
-
 except Exception as e:
-    # API 키가 없거나 틀렸을 때 에러 처리
-    if API_KEY == "SECRET_KEY_NOT_FOUND":
-        st.error("⚠️ API 키를 찾을 수 없습니다.")
-        st.warning("Streamlit Cloud의 [Settings] -> [Secrets]에 'GEMINI_API_KEY'를 등록해주세요.")
-        st.stop() # 중단
-    else:
+    if API_KEY != "SECRET_KEY_NOT_FOUND":
         st.error(f"API 연결 오류: {e}")
 
 # ---------------------------------------------------------
-# [데이터 파일 설정] - 여기가 누락되어 에러가 났던 부분입니다!
+# [데이터 파일 설정]
 # ---------------------------------------------------------
 DATA_FILE = "my_portfolio.json"
 
@@ -75,16 +65,12 @@ def save_portfolio(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# 앱 시작 시 데이터 로드
 if 'portfolio_db' not in st.session_state:
     st.session_state['portfolio_db'] = load_portfolio()
 
 @st.cache_data(ttl=600)
 def get_market_indices():
-    tickers = {
-        "USD/KRW": "KRW=X", "US 10Y": "^TNX", 
-        "VIX (Fear)": "^VIX", "KOSPI": "^KS11", "NASDAQ": "^IXIC"
-    }
+    tickers = {"USD/KRW": "KRW=X", "US 10Y": "^TNX", "VIX (Fear)": "^VIX", "KOSPI": "^KS11", "NASDAQ": "^IXIC"}
     data = {}
     for name, ticker in tickers.items():
         try:
@@ -100,14 +86,19 @@ def get_market_indices():
 @st.cache_data(ttl=900)
 def get_fear_and_greed_index():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # [수정됨] 더 강력한 헤더 (차단 방지용)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Referer": "https://www.cnn.com/",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
     try:
-        r = requests.get(url, headers=headers, timeout=5)
+        r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
         data = r.json()
         return data['fear_and_greed']['score'], data['fear_and_greed']['rating']
-    except:
-        return None, "N/A"
+    except Exception as e:
+        return None, f"Error: {e}"
 
 @st.cache_data(ttl=600)
 def get_stock_details(ticker):
@@ -117,22 +108,17 @@ def get_stock_details(ticker):
         hist = stock.history(period="1mo")
         if hist.empty: return None
         current = hist['Close'].iloc[-1]
-        
         delta = hist['Close'].diff(1)
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs)).iloc[-1]
-        
         return {
-            "current": current,
-            "rsi": rsi,
-            "per": info.get('trailingPE', 0),
-            "pbr": info.get('priceToBook', 0),
+            "current": current, "rsi": rsi,
+            "per": info.get('trailingPE', 0), "pbr": info.get('priceToBook', 0),
             "div_yield": info.get('dividendYield', 0) * 100 if info.get('dividendYield') else 0
         }
-    except:
-        return None
+    except: return None
 
 @st.cache_data(ttl=3600)
 def get_sector_history():
@@ -140,8 +126,7 @@ def get_sector_history():
     try:
         df = yf.download(list(sectors.values()), period="1y", progress=False)['Close']
         return df, sectors
-    except:
-        return pd.DataFrame(), sectors
+    except: return pd.DataFrame(), sectors
 
 def calculate_sector_change(df, period_str):
     periods = {"1일": 2, "1주": 5, "1달": 21, "1분기": 63, "반년": 126, "1년": 252}
@@ -178,13 +163,10 @@ def draw_gauge_chart(score):
         domain = {'x': [0, 1], 'y': [0, 1]},
         title = {'text': "Fear & Greed Index"},
         gauge = {
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "black"},
+            'axis': {'range': [0, 100]}, 'bar': {'color': "black"},
             'steps': [
-                {'range': [0, 25], 'color': '#FF4B4B'},
-                {'range': [25, 45], 'color': '#FF8E8E'},
-                {'range': [45, 55], 'color': '#E8E8E8'},
-                {'range': [55, 75], 'color': '#90EE90'},
+                {'range': [0, 25], 'color': '#FF4B4B'}, {'range': [25, 45], 'color': '#FF8E8E'},
+                {'range': [45, 55], 'color': '#E8E8E8'}, {'range': [55, 75], 'color': '#90EE90'},
                 {'range': [75, 100], 'color': '#008000'}
             ],
             'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': score}
@@ -194,11 +176,11 @@ def draw_gauge_chart(score):
     return fig
 
 # ---------------------------------------------------------
-# [자동화된 AI 분석 함수]
+# [AI 분석 함수]
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_ai_market_briefing(f_score):
-    if API_KEY == "SECRET_KEY_NOT_FOUND": return "API 키가 설정되지 않아 분석할 수 없습니다."
+    if API_KEY == "SECRET_KEY_NOT_FOUND": return "⚠️ API 키가 설정되지 않았습니다."
     today_str = datetime.now().strftime("%Y-%m-%d")
     prompt = f"오늘은 {today_str}. 공포지수 {f_score}. 버핏지수 추정 및 투자 조언 3줄 요약."
     try: return model.generate_content(prompt).text
@@ -218,9 +200,7 @@ def get_ai_calendar_data():
 # =========================================================
 # [UI 구성]
 # =========================================================
-
-# 1. Market Index
-st.markdown("### 🌍 Global Market & VIX")
+st.markdown(f"### 🌍 Global Market ({api_status})") # API 연결 상태 표시
 market = get_market_indices()
 m_cols = st.columns(5)
 for i, (k, v) in enumerate(market.items()):
@@ -228,7 +208,6 @@ for i, (k, v) in enumerate(market.items()):
 
 st.divider()
 
-# 2. Sector Chart
 st.title("💰 Smart Asset Dashboard")
 sector_df, sector_map = get_sector_history()
 inv_sector_map = {v: k for k, v in sector_map.items()}
@@ -249,7 +228,6 @@ with c2:
 
 st.divider()
 
-# 3. Sentiment & Calendar
 st.subheader("📅 Market Sentiment & Calendar")
 col_cal_left, col_cal_right = st.columns([1, 1])
 
@@ -258,13 +236,13 @@ with col_cal_left:
     f_score, f_rating = get_fear_and_greed_index()
     if f_score is not None:
         st.plotly_chart(draw_gauge_chart(f_score), use_container_width=True)
-        st.caption(f"현재 상태: **{f_rating.upper()} ({int(f_score)})**")
+        st.caption(f"현재 상태: **{f_rating} ({int(f_score)})**")
         st.markdown("---")
         st.markdown("##### 🧠 AI Market Insight")
         with st.spinner("Analyzing..."):
             st.info(get_ai_market_briefing(f_score))
     else:
-        st.error("지수 로딩 실패")
+        st.error(f"지수 로딩 실패: {f_rating}") # 에러 메시지 상세 표시
 
 with col_cal_right:
     st.markdown("##### 🗓️ 주요 경제 일정 (2주)")
@@ -273,11 +251,13 @@ with col_cal_right:
     if cal_data:
         st.dataframe(pd.DataFrame(cal_data), column_config={"date":"날짜","event":"이벤트","importance":"중요도"}, hide_index=True, use_container_width=True)
     else:
-        st.warning("일정 데이터 없음 (API 키 확인 필요)")
+        if API_KEY == "SECRET_KEY_NOT_FOUND":
+            st.warning("⚠️ **API 키가 없습니다.**\n앱 하단 [Manage app] -> [Settings] -> [Secrets]에 키를 등록하세요.")
+        else:
+            st.warning("일정 데이터 없음 (AI 응답 오류)")
 
 st.divider()
 
-# 4. Portfolio
 st.subheader("📂 My Portfolio")
 with st.expander("➕ 자산 추가 / 계좌 관리", expanded=False):
     db = st.session_state['portfolio_db']
