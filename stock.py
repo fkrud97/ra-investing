@@ -23,41 +23,48 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [보안] API 키 설정 (자동 감지 로직)
+# [보안] API 키 설정 (Streamlit Cloud Secrets 연동)
 # ---------------------------------------------------------
-# 1. API 키 가져오기 시도
 try:
-    # 배포 환경(Streamlit Cloud)에서는 여기서 키를 가져옵니다.
+    # 1. Streamlit Cloud의 Secrets에서 키를 가져옴
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except:
-    # 로컬 환경이거나 설정이 안 된 경우 (임시)
-    # 주의: 깃허브에 올릴 때는 아래 곳에 절대 실제 키를 적지 마세요!
-    API_KEY = "여기에_본인의_API_KEY를_넣으세요" 
+    # 2. 로컬(내 컴퓨터)이나 키 설정이 안 된 경우 안내
+    # (주의: 깃허브에 올릴 때는 절대 여기에 실제 키를 적지 마세요!)
+    API_KEY = "SECRET_KEY_NOT_FOUND" 
 
-# 2. Gemini 모델 연결 및 설정
+# ---------------------------------------------------------
+# [AI 모델 연결]
+# ---------------------------------------------------------
 try:
     genai.configure(api_key=API_KEY)
     
-    # 사용 가능한 모델 자동 탐색
-    target_model = "gemini-pro" # 기본값
+    # 모델 자동 탐색
+    target_model = "gemini-pro"
     for m in genai.list_models():
         if 'generateContent' in m.supported_generation_methods:
             if 'gemini' in m.name:
                 target_model = m.name
                 break
-    
     model = genai.GenerativeModel(target_model)
 
 except Exception as e:
-    st.error(f"⚠️ API 연결 실패: {e}")
-    st.error("Streamlit Cloud의 'Secrets' 설정에 API 키가 등록되었는지 확인해주세요.")
-    st.stop() # 키가 없으면 더 이상 진행하지 않고 멈춤
+    # API 키가 없거나 틀렸을 때 에러 처리
+    if API_KEY == "SECRET_KEY_NOT_FOUND":
+        st.error("⚠️ API 키를 찾을 수 없습니다.")
+        st.warning("Streamlit Cloud의 [Settings] -> [Secrets]에 'GEMINI_API_KEY'를 등록해주세요.")
+        st.stop() # 중단
+    else:
+        st.error(f"API 연결 오류: {e}")
+
+# ---------------------------------------------------------
+# [데이터 파일 설정] - 여기가 누락되어 에러가 났던 부분입니다!
+# ---------------------------------------------------------
+DATA_FILE = "my_portfolio.json"
 
 # ---------------------------------------------------------
 # [함수] 데이터 로직
 # ---------------------------------------------------------
-# (이 아래부터는 기존 코드와 동일합니다. DATA_FILE = ... 부터 시작)
-
 def load_portfolio():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -68,6 +75,7 @@ def save_portfolio(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+# 앱 시작 시 데이터 로드
 if 'portfolio_db' not in st.session_state:
     st.session_state['portfolio_db'] = load_portfolio()
 
@@ -91,18 +99,13 @@ def get_market_indices():
 
 @st.cache_data(ttl=900)
 def get_fear_and_greed_index():
-    """CNN Fear and Greed Index 가져오기"""
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         r = requests.get(url, headers=headers, timeout=5)
         r.raise_for_status()
         data = r.json()
-        score = data['fear_and_greed']['score']
-        rating = data['fear_and_greed']['rating']
-        return score, rating
+        return data['fear_and_greed']['score'], data['fear_and_greed']['rating']
     except:
         return None, "N/A"
 
@@ -171,14 +174,12 @@ def add_stock(account, ticker, price, qty):
 
 def draw_gauge_chart(score):
     fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = score,
+        mode = "gauge+number", value = score,
         domain = {'x': [0, 1], 'y': [0, 1]},
         title = {'text': "Fear & Greed Index"},
         gauge = {
-            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'axis': {'range': [0, 100]},
             'bar': {'color': "black"},
-            'bgcolor': "white",
             'steps': [
                 {'range': [0, 25], 'color': '#FF4B4B'},
                 {'range': [25, 45], 'color': '#FF8E8E'},
@@ -193,45 +194,32 @@ def draw_gauge_chart(score):
     return fig
 
 # ---------------------------------------------------------
-# [자동화된 AI 분석 함수] (버튼 제거용)
+# [자동화된 AI 분석 함수]
 # ---------------------------------------------------------
-@st.cache_data(ttl=3600) # 1시간마다 자동 갱신
+@st.cache_data(ttl=3600)
 def get_ai_market_briefing(f_score):
+    if API_KEY == "SECRET_KEY_NOT_FOUND": return "API 키가 설정되지 않아 분석할 수 없습니다."
     today_str = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"""
-    오늘은 {today_str}입니다.
-    현재 Fear & Greed Index 점수는 {f_score if f_score else '알수없음'}입니다.
-    
-    1. 현재 '버핏 지수(Buffett Indicator)' 상태를 추정하여 시장이 고평가인지 저평가인지 알려주세요.
-    2. 현재 공포/탐욕 단계에 따른 투자자의 행동 요령을 3줄로 조언해주세요.
-    """
-    try:
-        return model.generate_content(prompt).text
-    except Exception as e:
-        return f"분석 실패: {e}"
+    prompt = f"오늘은 {today_str}. 공포지수 {f_score}. 버핏지수 추정 및 투자 조언 3줄 요약."
+    try: return model.generate_content(prompt).text
+    except Exception as e: return f"분석 실패: {e}"
 
-@st.cache_data(ttl=43200) # 12시간마다 자동 갱신
+@st.cache_data(ttl=43200)
 def get_ai_calendar_data():
+    if API_KEY == "SECRET_KEY_NOT_FOUND": return []
     today_str = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"""
-    오늘은 {today_str}입니다. 향후 2주간 미국 주요 경제 지표(CPI, PPI, 고용), FOMC, 빅테크 실적 발표를 찾아줘.
-    반드시 아래 JSON 포맷으로만 답변해. 설명 없이 JSON만 줘.
-    [
-        {{"date": "MM-DD (요일)", "event": "이벤트명", "importance": "⭐⭐⭐"}}
-    ]
-    """
+    prompt = f"오늘 {today_str}. 향후 2주 미국 경제지표(CPI,PPI,고용), FOMC, 빅테크 실적 JSON 포맷으로: [{{'date':'MM-DD (요일)', 'event':'이름', 'importance':'⭐⭐⭐'}}]"
     try:
         res = model.generate_content(prompt)
         clean_json = res.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
-    except Exception as e:
-        return []
+    except: return []
 
 # =========================================================
 # [UI 구성]
 # =========================================================
 
-# 1. 🌍 Market Index
+# 1. Market Index
 st.markdown("### 🌍 Global Market & VIX")
 market = get_market_indices()
 m_cols = st.columns(5)
@@ -240,7 +228,7 @@ for i, (k, v) in enumerate(market.items()):
 
 st.divider()
 
-# 2. 💰 섹터 차트
+# 2. Sector Chart
 st.title("💰 Smart Asset Dashboard")
 sector_df, sector_map = get_sector_history()
 inv_sector_map = {v: k for k, v in sector_map.items()}
@@ -249,66 +237,48 @@ c1, c2 = st.columns([1, 6])
 with c1:
     st.write("⏱️ **기간 선택**")
     sel_period = st.radio("기간", ["1일", "1주", "1달", "1분기", "반년", "1년"], label_visibility="collapsed")
-
 with c2:
     if not sector_df.empty:
         changes = calculate_sector_change(sector_df, sel_period)
         df_chart = pd.DataFrame(list(changes.items()), columns=['Ticker', 'Change'])
         df_chart['Name'] = df_chart['Ticker'].map(inv_sector_map)
         df_chart['Color'] = df_chart['Change'].apply(lambda x: '#ff4b4b' if x > 0 else '#4b88ff')
-        
-        fig = go.Figure(go.Bar(
-            x=df_chart['Name'], y=df_chart['Change'], marker_color=df_chart['Color'],
-            text=df_chart['Change'].apply(lambda x: f"{x:.2f}%"), textposition='auto'
-        ))
+        fig = go.Figure(go.Bar(x=df_chart['Name'], y=df_chart['Change'], marker_color=df_chart['Color'], text=df_chart['Change'].apply(lambda x: f"{x:.2f}%"), textposition='auto'))
         fig.update_layout(height=250, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="등락률(%)")
         st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
-# 3. 📅 시장 심리(Fear&Greed) & 경제 일정
+# 3. Sentiment & Calendar
 st.subheader("📅 Market Sentiment & Calendar")
 col_cal_left, col_cal_right = st.columns([1, 1])
 
-# [왼쪽] Fear & Greed Index + 버핏지수 브리핑
 with col_cal_left:
-    st.markdown("##### 😨 Fear & Greed Index (실시간)")
-    
-    # Fear & Greed 데이터 가져오기
+    st.markdown("##### 😨 Fear & Greed Index")
     f_score, f_rating = get_fear_and_greed_index()
-    
     if f_score is not None:
         st.plotly_chart(draw_gauge_chart(f_score), use_container_width=True)
         st.caption(f"현재 상태: **{f_rating.upper()} ({int(f_score)})**")
-        
         st.markdown("---")
         st.markdown("##### 🧠 AI Market Insight")
-        # 자동 분석 (캐싱됨)
-        with st.spinner("AI가 시장 심리를 분석 중입니다..."):
-            briefing = get_ai_market_briefing(f_score)
-            st.info(briefing)
+        with st.spinner("Analyzing..."):
+            st.info(get_ai_market_briefing(f_score))
     else:
-        st.error("지수 데이터를 가져오는데 실패했습니다.")
+        st.error("지수 로딩 실패")
 
-# [오른쪽] 경제 일정
 with col_cal_right:
     st.markdown("##### 🗓️ 주요 경제 일정 (2주)")
-    
-    # 자동 일정 로드 (캐싱됨)
-    with st.spinner("경제 일정을 불러오는 중..."):
+    with st.spinner("Loading Calendar..."):
         cal_data = get_ai_calendar_data()
-    
     if cal_data:
-        df_cal = pd.DataFrame(cal_data)
-        st.dataframe(df_cal, column_config={"date":"날짜","event":"이벤트","importance":"중요도"}, hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(cal_data), column_config={"date":"날짜","event":"이벤트","importance":"중요도"}, hide_index=True, use_container_width=True)
     else:
-        st.warning("일정 데이터를 불러오지 못했습니다.")
+        st.warning("일정 데이터 없음 (API 키 확인 필요)")
 
 st.divider()
 
-# 4. 📂 My Portfolio
+# 4. Portfolio
 st.subheader("📂 My Portfolio")
-
 with st.expander("➕ 자산 추가 / 계좌 관리", expanded=False):
     db = st.session_state['portfolio_db']
     accounts = list(db.keys())
@@ -360,9 +330,12 @@ if db:
 
 st.write("")
 if st.button("🤖 가치투자 포트폴리오 진단 (AI)", use_container_width=True):
-    if not total_ai_data: st.warning("자산 없음")
+    if API_KEY == "SECRET_KEY_NOT_FOUND":
+        st.error("API 키가 없습니다. Settings -> Secrets를 설정해주세요.")
+    elif not total_ai_data:
+        st.warning("자산 없음")
     else:
-        st.write("🔍 Gemini가 밸류에이션을 분석 중입니다...")
+        st.write("🔍 Gemini 분석 중...")
         prompt = f"[시장] {market}\n[공포지수] {f_score}\n[자산] {total_ai_data}\n가치투자 관점에서 내 포트폴리오를 평가하고 전략을 제안해줘."
         try:
             res_box = st.empty()
