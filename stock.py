@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 import json
 import os
 import requests
-import re
 from datetime import datetime
 
 # ---------------------------------------------------------
@@ -142,11 +141,22 @@ def manage_account_action(action, old_name, new_name=None):
             st.rerun()
 
 # ---------------------------------------------------------
-# [데이터 페칭]
+# [데이터 페칭] - 지수 목록 업데이트 완료!
 # ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def get_market_indices():
-    tickers = {"USD/KRW": "KRW=X", "S&P500": "^GSPC", "NASDAQ": "^IXIC", "KOSPI": "^KS11"}
+    # 요청하신 다우존스, 코스닥, 금, 비트코인, WTI 추가
+    tickers = {
+        "🇺🇸 다우존스": "^DJI",
+        "🇺🇸 S&P500": "^GSPC",
+        "🇺🇸 나스닥": "^IXIC",
+        "🇰🇷 코스피": "^KS11",
+        "🇰🇷 코스닥": "^KQ11",
+        "₿ 비트코인": "BTC-USD",
+        "🥇 금 선물": "GC=F",
+        "🛢 WTI오일": "CL=F",
+        "💵 환율(원)": "KRW=X"
+    }
     data = {}
     for name, ticker in tickers.items():
         try:
@@ -158,12 +168,10 @@ def get_market_indices():
 
 @st.cache_data(ttl=300)
 def get_current_prices(ticker_list):
-    """여러 종목의 현재가를 한번에 가져옴 (속도 최적화)"""
     if not ticker_list: return {}
     try:
         data = yf.download(ticker_list, period="1d", progress=False)['Close']
         if data.empty: return {}
-        # 종목이 1개일 때와 여러개일 때 처리
         if len(ticker_list) == 1:
             return {ticker_list[0]: data.iloc[-1]}
         return data.iloc[-1].to_dict()
@@ -199,18 +207,17 @@ if not st.session_state['logged_in']: login_page(); st.stop()
 # ---------------------------------------------------------
 # [메인 대시보드]
 # ---------------------------------------------------------
-# 데이터 로드
 if 'portfolio_db' not in st.session_state: st.session_state['portfolio_db'] = load_portfolio()
 db = st.session_state['portfolio_db']
 
-# 1. 헤더 (유저 환영 및 로그아웃)
+# 1. 헤더
 c_h1, c_h2 = st.columns([8, 1])
 with c_h1: st.write(f"👋 반가워요, **{st.session_state['username']}**님")
 with c_h2: 
     if st.button("로그아웃"): 
         st.session_state['logged_in'] = False; st.session_state['username'] = None; st.rerun()
 
-# 2. 자산 전체 계산 (Hero Section)
+# 2. 자산 전체 계산
 total_invest = 0.0
 total_eval = 0.0
 all_tickers = []
@@ -219,7 +226,6 @@ for acc in db.values():
     for info in acc.values():
         total_invest += info['avg_price'] * info['qty']
 
-# 현재가 가져오기
 all_tickers = list(set(all_tickers))
 price_map = get_current_prices(all_tickers)
 
@@ -228,12 +234,12 @@ for acc in db.values():
         if t in price_map:
             total_eval += price_map[t] * info['qty']
         else:
-            total_eval += info['avg_price'] * info['qty'] # 현재가 없으면 매수가로 대체
+            total_eval += info['avg_price'] * info['qty']
 
 total_profit = total_eval - total_invest
 total_yield = (total_profit / total_invest * 100) if total_invest > 0 else 0.0
 
-# 3. 토스 스타일 메인 카드 (총 자산 현황)
+# 3. 토스 스타일 메인 카드
 st.markdown(f"""
 <div class="metric-card">
     <div class="sub-text">총 보유자산</div>
@@ -254,39 +260,34 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 4. 탭 구성 (포트폴리오, 거래하기, 계좌관리, 시장정보)
+# 4. 탭 구성
 tab_pf, tab_trade, tab_manage, tab_market = st.tabs(["📊 포트폴리오", "🔄 거래하기", "⚙️ 계좌관리", "🌍 시장정보"])
 
-# [탭 1] 포트폴리오 (계좌별 상세)
+# [탭 1] 포트폴리오
 with tab_pf:
     if not db:
         st.info("📌 계좌가 없습니다. '계좌관리' 탭에서 먼저 만들어주세요.")
     else:
         for acc_name, stocks in db.items():
-            # 계좌별 요약 계산
             acc_invest = sum(i['avg_price'] * i['qty'] for i in stocks.values())
             acc_eval = sum((price_map.get(t, i['avg_price']) * i['qty']) for t, i in stocks.items())
             acc_profit = acc_eval - acc_invest
             acc_yield = (acc_profit / acc_invest * 100) if acc_invest > 0 else 0.0
             
-            # 계좌 카드 헤더
             with st.expander(f"📂 {acc_name} (₩{acc_eval:,.0f})", expanded=True):
-                # 계좌 요약
                 c1, c2, c3 = st.columns(3)
                 c1.metric("평가손익", f"{acc_profit:,.0f}", f"{acc_yield:.2f}%")
                 c2.metric("매입금액", f"{acc_invest:,.0f}")
                 
-                # 종목 리스트 (DataFrame)
                 if stocks:
                     rows = []
                     for t, info in stocks.items():
                         curr = price_map.get(t, info['avg_price'])
                         p_rate = ((curr - info['avg_price']) / info['avg_price']) * 100
-                        val = curr * info['qty']
                         rows.append({
                             "종목": t,
                             "현재가": curr,
-                            "수익률": p_rate / 100, # % 서식을 위해 소수로
+                            "수익률": p_rate / 100,
                             "평가손익": (curr - info['avg_price']) * info['qty'],
                             "보유수량": info['qty'],
                             "매입가": info['avg_price']
@@ -305,14 +306,12 @@ with tab_pf:
                         hide_index=True,
                         use_container_width=True
                     )
-                else:
-                    st.caption("보유 주식이 없습니다.")
+                else: st.caption("보유 주식이 없습니다.")
 
-# [탭 2] 거래하기 (매수/매도/분할매도)
+# [탭 2] 거래하기
 with tab_trade:
     st.subheader("주문하기")
-    if not db:
-        st.warning("계좌를 먼저 생성해주세요.")
+    if not db: st.warning("계좌를 먼저 생성해주세요.")
     else:
         tr_acc = st.selectbox("계좌 선택", list(db.keys()))
         col_type = st.radio("주문 유형", ["매수 (Buy)", "매도 (Sell)"], horizontal=True, label_visibility="collapsed")
@@ -323,55 +322,46 @@ with tab_trade:
             tr_qty = c2.number_input("수량", min_value=1, value=1)
             tr_price = c3.number_input("거래단가", min_value=0.0, value=0.0)
             
-            submitted = st.form_submit_button("주문 실행", use_container_width=True)
-            
-            if submitted:
-                if not tr_ticker or tr_price <= 0:
-                    st.error("종목과 가격을 정확히 입력해주세요.")
+            if st.form_submit_button("주문 실행", use_container_width=True):
+                if not tr_ticker or tr_price <= 0: st.error("정보 입력 필요")
                 else:
                     mode = "buy" if "매수" in col_type else "sell"
                     msg = trade_stock(tr_acc, tr_ticker, tr_price, tr_qty, mode)
                     if "❌" in msg: st.error(msg)
                     else: st.success(msg); st.rerun()
 
-# [탭 3] 계좌 관리 (생성/수정/삭제)
+# [탭 3] 계좌 관리
 with tab_manage:
     st.subheader("계좌 설정")
-    
-    # 1. 계좌 생성
     with st.expander("➕ 새 계좌 만들기", expanded=False):
-        new_acc_name = st.text_input("계좌 이름 입력 (예: 비상금)")
-        if st.button("계좌 생성"):
-            manage_account_action("create", None, new_acc_name)
+        new_acc_name = st.text_input("계좌 이름")
+        if st.button("계좌 생성"): manage_account_action("create", None, new_acc_name)
 
-    # 2. 계좌 수정/삭제
     if db:
         with st.expander("🔧 계좌 이름 변경 / 삭제", expanded=False):
             target_acc = st.selectbox("관리할 계좌", list(db.keys()))
-            
             c_ren, c_del = st.columns([3, 1])
             with c_ren:
                 rename_to = st.text_input("새로운 이름")
-                if st.button("이름 변경"):
-                    manage_account_action("rename", target_acc, rename_to)
+                if st.button("이름 변경"): manage_account_action("rename", target_acc, rename_to)
             with c_del:
-                st.write("") # 줄맞춤용
-                st.write("") 
-                if st.button("🗑️ 계좌 삭제", type="primary"):
-                    manage_account_action("delete", target_acc)
-    else:
-        st.info("생성된 계좌가 없습니다.")
+                st.write(""); st.write("") 
+                if st.button("🗑️ 삭제", type="primary"): manage_account_action("delete", target_acc)
 
-# [탭 4] 시장 정보 (Market)
+# [탭 4] 시장 정보 (업데이트된 지표 목록)
 with tab_market:
-    st.markdown("##### 🌍 주요 지수")
+    st.markdown("##### 🌍 주요 시장 지표")
     indices = get_market_indices()
-    m_cols = st.columns(4)
-    for i, (k, v) in enumerate(indices.items()):
-        color = "off" if v[1] == 0 else ("inverse" if v[1] > 0 else "normal") # 상승=초록(st.metric 기본)
-        m_cols[i].metric(k, f"{v[0]:,.2f}", f"{v[1]:.2f}%")
     
-    # AI 브리핑 (기존 기능 연동)
+    # 3열로 배치하여 깔끔하게 표시
+    m_cols = st.columns(3)
+    for i, (k, v) in enumerate(indices.items()):
+        # i % 3을 사용하여 3열씩 순서대로 채움
+        m_cols[i % 3].metric(k, f"{v[0]:,.2f}", f"{v[1]:.2f}%")
+    
+    st.divider()
+    
+    # AI 브리핑
     if st.button("🤖 AI 시장 브리핑 (Gemini)"):
         if API_KEY == "SECRET_KEY_NOT_FOUND":
             st.error("API 키가 설정되지 않았습니다.")
