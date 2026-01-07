@@ -86,7 +86,6 @@ def get_market_indices():
 @st.cache_data(ttl=900)
 def get_fear_and_greed_index():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    # [수정됨] 더 강력한 헤더 (차단 방지용)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "Referer": "https://www.cnn.com/",
@@ -176,7 +175,7 @@ def draw_gauge_chart(score):
     return fig
 
 # ---------------------------------------------------------
-# [AI 분석 함수]
+# [AI 분석 함수] - 여기가 수정되었습니다!
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_ai_market_briefing(f_score):
@@ -190,17 +189,38 @@ def get_ai_market_briefing(f_score):
 def get_ai_calendar_data():
     if API_KEY == "SECRET_KEY_NOT_FOUND": return []
     today_str = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"오늘 {today_str}. 향후 2주 미국 경제지표(CPI,PPI,고용), FOMC, 빅테크 실적 JSON 포맷으로: [{{'date':'MM-DD (요일)', 'event':'이름', 'importance':'⭐⭐⭐'}}]"
+    # Prompt 개선: 무조건 JSON만 뱉도록 강력하게 지시
+    prompt = f"""
+    Today is {today_str}.
+    List major US economic events (CPI, PPI, NFP, FOMC, Big Tech Earnings) for the next 2 weeks.
+    Return ONLY a valid JSON array. Do not use Markdown code blocks. Do not say anything else.
+    Format:
+    [
+      {{"date": "MM-DD (Mon)", "event": "Event Name", "importance": "⭐⭐⭐"}},
+      ...
+    ]
+    Translate event names to Korean.
+    """
     try:
         res = model.generate_content(prompt)
-        clean_json = res.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_json)
-    except: return []
+        text = res.text
+        
+        # 데이터 파싱 로직 강화: '[' 와 ']' 사이의 글자만 발라냄
+        start_idx = text.find('[')
+        end_idx = text.rfind(']') + 1
+        
+        if start_idx != -1 and end_idx != -1:
+            clean_json = text[start_idx:end_idx]
+            return json.loads(clean_json)
+        else:
+            return []
+    except Exception as e:
+        return []
 
 # =========================================================
 # [UI 구성]
 # =========================================================
-st.markdown(f"### 🌍 Global Market ({api_status})") # API 연결 상태 표시
+st.markdown(f"### 🌍 Global Market ({api_status})")
 market = get_market_indices()
 m_cols = st.columns(5)
 for i, (k, v) in enumerate(market.items()):
@@ -242,7 +262,8 @@ with col_cal_left:
         with st.spinner("Analyzing..."):
             st.info(get_ai_market_briefing(f_score))
     else:
-        st.error(f"지수 로딩 실패: {f_rating}") # 에러 메시지 상세 표시
+        # 혹시 에러나면 사용자에게 알려줌
+        st.error(f"지수 로딩 실패: {f_rating}") 
 
 with col_cal_right:
     st.markdown("##### 🗓️ 주요 경제 일정 (2주)")
@@ -254,7 +275,7 @@ with col_cal_right:
         if API_KEY == "SECRET_KEY_NOT_FOUND":
             st.warning("⚠️ **API 키가 없습니다.**\n앱 하단 [Manage app] -> [Settings] -> [Secrets]에 키를 등록하세요.")
         else:
-            st.warning("일정 데이터 없음 (AI 응답 오류)")
+            st.warning("일정 데이터 없음 (AI 파싱 오류)\n잠시 후 다시 시도해보세요.")
 
 st.divider()
 
