@@ -22,15 +22,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [사용자 관리] 아이디/비밀번호 설정 (원하는대로 추가하세요)
-# ---------------------------------------------------------
-USERS = {
-    "admin": "1234",      # 아이디: admin, 비번: 1234
-    "guest": "0000",      # 아이디: guest, 비번: 0000
-    "wife": "love1234"    # 예시: 와이프 계정
-}
-
-# ---------------------------------------------------------
 # [보안] API 키 설정
 # ---------------------------------------------------------
 try:
@@ -39,39 +30,82 @@ except:
     API_KEY = "SECRET_KEY_NOT_FOUND"
 
 # ---------------------------------------------------------
-# [로그인 화면 함수]
+# [회원 관리 시스템] JSON 파일로 유저 정보 관리
+# ---------------------------------------------------------
+USER_FILE = "users.json"
+
+def load_users():
+    """유저 목록 불러오기"""
+    if os.path.exists(USER_FILE):
+        with open(USER_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"admin": "1234"} # 기본 관리자 계정
+
+def save_user(username, password):
+    """신규 유저 저장하기"""
+    users = load_users()
+    users[username] = password
+    with open(USER_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=4)
+
+# ---------------------------------------------------------
+# [로그인 & 회원가입 화면]
 # ---------------------------------------------------------
 def login_page():
-    st.title("🔐 Asset Manager Login")
-    st.write("나만의 포트폴리오를 관리하려면 로그인하세요.")
+    st.title("🔐 Smart Asset Home")
+    st.write("개인 자산 관리 시스템에 오신 것을 환영합니다.")
 
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
+    # 탭으로 로그인/회원가입 분리
+    tab1, tab2 = st.tabs(["🔑 로그인", "📝 회원가입"])
+
+    # 1. 로그인 탭
+    with tab1:
         with st.form("login_form"):
-            username = st.text_input("아이디 (ID)")
-            password = st.text_input("비밀번호 (Password)", type="password")
+            username = st.text_input("아이디")
+            password = st.text_input("비밀번호", type="password")
             submit = st.form_submit_button("로그인")
 
             if submit:
-                if username in USERS and USERS[username] == password:
+                users_db = load_users()
+                if username in users_db and users_db[username] == password:
                     st.session_state['logged_in'] = True
                     st.session_state['username'] = username
-                    st.success(f"환영합니다, {username}님!")
-                    st.rerun() # 화면 새로고침해서 대시보드로 이동
+                    st.success(f"{username}님 환영합니다!")
+                    st.rerun()
                 else:
-                    st.error("아이디 또는 비밀번호가 틀렸습니다.")
+                    st.error("아이디가 없거나 비밀번호가 틀렸습니다.")
+
+    # 2. 회원가입 탭
+    with tab2:
+        with st.form("signup_form"):
+            new_user = st.text_input("새 아이디 만들기")
+            new_pw = st.text_input("새 비밀번호 설정", type="password")
+            new_pw_chk = st.text_input("비밀번호 확인", type="password")
+            signup_submit = st.form_submit_button("가입하기")
+
+            if signup_submit:
+                users_db = load_users()
+                if new_user in users_db:
+                    st.error("이미 존재하는 아이디입니다.")
+                elif new_pw != new_pw_chk:
+                    st.error("비밀번호가 서로 다릅니다.")
+                elif not new_user or not new_pw:
+                    st.error("아이디와 비밀번호를 입력해주세요.")
+                else:
+                    save_user(new_user, new_pw)
+                    st.success("🎉 가입 성공! '로그인' 탭에서 접속해주세요.")
 
 def logout():
     st.session_state['logged_in'] = False
     st.session_state['username'] = None
-    st.session_state.pop('portfolio_db', None) # 데이터 초기화
+    if 'portfolio_db' in st.session_state:
+        del st.session_state['portfolio_db']
     st.rerun()
 
 # ---------------------------------------------------------
-# [데이터 관리] 유저별 파일 분리 로직 (핵심!)
+# [데이터 관리] 유저별 포트폴리오 파일 분리
 # ---------------------------------------------------------
 def get_user_file():
-    # 로그인한 유저의 이름을 따서 파일명을 만듦 (예: portfolio_admin.json)
     user = st.session_state.get('username', 'guest')
     return f"portfolio_{user}.json"
 
@@ -88,43 +122,39 @@ def save_portfolio(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # ---------------------------------------------------------
-# [메인 로직 시작]
+# [메인 로직 실행]
 # ---------------------------------------------------------
-# 1. 로그인 상태 확인
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
-# 2. 로그인이 안 되어 있으면 -> 로그인 페이지 보여주고 프로그램 종료(return)
+# 로그인이 안 되어 있으면 로그인 페이지 표시 후 중단
 if not st.session_state['logged_in']:
     login_page()
-    st.stop() # 여기서 코드 실행 멈춤 (아래 대시보드 안 보여줌)
+    st.stop()
 
 # =========================================================
-# 이 아래부터는 "로그인 성공한 사람"만 볼 수 있는 코드입니다.
+# [대시보드 화면] (로그인 사용자만 접근 가능)
 # =========================================================
 
-# 상단바 (로그아웃 버튼)
-col_head1, col_head2 = st.columns([8, 1])
-with col_head1:
-    st.write(f"👋 안녕하세요, **{st.session_state['username']}**님! 성투하세요!")
-with col_head2:
+# 상단 헤더
+col_h1, col_h2 = st.columns([8, 1])
+with col_h1:
+    st.write(f"👋 **{st.session_state['username']}**님의 포트폴리오")
+with col_h2:
     if st.button("로그아웃"):
         logout()
 
-# ---------------------------------------------------------
-# [AI 모델 연결]
-# ---------------------------------------------------------
+# AI 설정
 try:
     genai.configure(api_key=API_KEY)
     model = genai.GenerativeModel("gemini-pro")
 except: pass
 
-# ---------------------------------------------------------
-# [기능 함수들] (기존과 동일)
-# ---------------------------------------------------------
+# 데이터 로딩
 if 'portfolio_db' not in st.session_state:
     st.session_state['portfolio_db'] = load_portfolio()
 
+# --- [함수들] (기존 로직 유지) ---
 @st.cache_data(ttl=600)
 def get_market_indices():
     tickers = {"USD/KRW": "KRW=X", "US 10Y": "^TNX", "VIX": "^VIX", "KOSPI": "^KS11", "NASDAQ": "^IXIC"}
@@ -142,7 +172,10 @@ def get_market_indices():
 def get_fear_and_greed():
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Referer": "https://www.cnn.com/"
+        }
         r = requests.get(url, headers=headers, timeout=5)
         d = r.json()
         return d['fear_and_greed']['score'], d['fear_and_greed']['rating']
@@ -180,11 +213,9 @@ def add_stock(acc, t, p, q):
         nq = oq + q; np = ((op * oq) + (p * q)) / nq
         db[acc][t] = {'avg_price': np, 'qty': nq}
     else: db[acc][t] = {'avg_price': p, 'qty': q}
-    save_portfolio(db) # 유저별 파일에 저장
+    save_portfolio(db)
 
-# ---------------------------------------------------------
-# [UI - 대시보드]
-# ---------------------------------------------------------
+# --- [UI 구성] ---
 st.divider()
 mk = get_market_indices()
 cols = st.columns(5)
@@ -205,14 +236,13 @@ with c2:
     st.subheader("📊 Sector Trend (1 Month)")
     sdf = get_sector_data()
     if not sdf.empty:
-        # 1달 전 대비 등락률
         chg = ((sdf.iloc[-1] - sdf.iloc[-21]) / sdf.iloc[-21]) * 100
         fig = go.Figure(go.Bar(x=chg.index, y=chg.values, marker_color=['red' if x>0 else 'blue' for x in chg.values]))
         fig.update_layout(height=250, margin=dict(t=30,b=20,l=20,r=20))
         st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
-st.subheader(f"📂 My Portfolio ({st.session_state['username']})")
+st.subheader("📂 My Portfolio")
 
 with st.expander("➕ 자산 관리 / 계좌 추가", expanded=False):
     db = st.session_state['portfolio_db']
